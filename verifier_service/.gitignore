@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.so
+
+# Virtualenv
+venv/
+env/
+ENV/
+.venv/
+
+# VSCode / PyCharm
+.vscode/
+.idea/
+
+# Django stuff
+*.log
+*.pot
+*.pyc
+db.sqlite3
+db.sqlite3-journal
+
+*/migrations/
+!*/migrations/__init__.py
+
+# Static & Media
+/staticfiles/
+/static/
+/media/
+/public/
+
+# Cache
+*.cache
+cache/
+__pycache__/
+
+# Env files / secrets
+.env
+*.env
+.env.*
+
+# Gunicorn / Nginx
+gunicorn.pid
+gunicorn.sock
+*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python build
+build/
+dist/
+*.egg-info/
+
+# Coverage / test
+htmlcov/
+.coverage
+.cache
+pytest_cache/

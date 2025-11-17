@@ -1,0 +1,90 @@
+from rest_framework import serializers
+
+class InformationsSer(serializers.Serializer):
+    legalfirstname = serializers.CharField(required=False, allow_blank=True)
+    legallastname  = serializers.CharField(required=False, allow_blank=True)
+    legalmiddlename = serializers.CharField(required=False, allow_blank=True)
+    npinumber = serializers.CharField(required=False, allow_blank=True)
+    phone = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+    address2 = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    stateprovince = serializers.CharField(required=False, allow_blank=True)
+    zipcode = serializers.CharField(required=False, allow_blank=True)
+    specialization = serializers.CharField(required=False, allow_blank=True)
+    skills = serializers.CharField(required=False, allow_blank=True)
+    total_experience_years = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class RowEdu(serializers.Serializer):
+    institution = serializers.CharField(required=False, allow_blank=True)
+    degree = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+    start = serializers.CharField(required=False, allow_blank=True)
+    end = serializers.CharField(required=False, allow_blank=True)
+    graduated = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class RowTraining(serializers.Serializer):
+    institution = serializers.CharField(required=False, allow_blank=True)
+    specialty = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+    start = serializers.CharField(required=False, allow_blank=True)
+    end = serializers.CharField(required=False, allow_blank=True)
+    program_type = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class RowLicence(serializers.Serializer):
+    state = serializers.CharField(required=False, allow_blank=True)
+    number = serializers.CharField(required=False, allow_blank=True)
+    issue_date = serializers.CharField(required=False, allow_blank=True)
+    expiry_date = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    is_primary = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class RowBoard(serializers.Serializer):
+    board = serializers.CharField(required=False, allow_blank=True)
+    specialty = serializers.CharField(required=False, allow_blank=True)
+    issue_date = serializers.CharField(required=False, allow_blank=True)
+    expiry_date = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    certificate_id = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class RowDEA(serializers.Serializer):
+    dea_number = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    issue_date = serializers.CharField(required=False, allow_blank=True)
+    expiry_date = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    schedules = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class RowRef(serializers.Serializer):
+    name = serializers.CharField(required=False, allow_blank=True)
+    title = serializers.CharField(required=False, allow_blank=True)
+    institution = serializers.CharField(required=False, allow_blank=True)
+    phone = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    relationship = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class ResumePayloadSer(serializers.Serializer):
+    informations = InformationsSer(required=False)
+    education = RowEdu(many=True, required=False)
+    medical_education = RowEdu(many=True, required=False)
+    graduate_school = RowEdu(many=True, required=False)
+    internship = RowTraining(many=True, required=False)
+    residency = RowTraining(many=True, required=False)
+    fellowship = RowTraining(many=True, required=False)
+    board_certifications = RowBoard(many=True, required=False)
+    medical_licences = RowLicence(many=True, required=False)
+    dea_registration = RowDEA(many=True, required=False)
+    other_exams = serializers.ListField(child=serializers.DictField(), required=False)
+    professional_reference = RowRef(many=True, required=False)
+    quality = serializers.DictField(required=False)
