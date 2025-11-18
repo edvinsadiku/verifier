@@ -189,6 +189,8 @@ def _enrich_fake_payload(npi_seed: Dict[str, Any], npi: str) -> Dict[str, Any]:
 
 # ─────────────────────────────── VIEWS ───────────────────────────────
 
+# ───────────────────────── VIEWS ─────────────────────────
+
 @api_view(["GET"])
 def health(request):
     return Response({"ok": True})
@@ -256,7 +258,6 @@ def parse_resume(request):
     npi = request.POST.get("npi") or request.query_params.get("npi")
     if npi:
         try:
-            # përdor funksionin lokal npi_lookup duke i futur requestin raw (Django HttpRequest)
             base = npi_lookup(request._request)
             if getattr(base, "status_code", 500) == 200:
                 base_info = base.data.get("result") or {}
@@ -370,19 +371,62 @@ If unsure, omit.
 @api_view(["GET"])
 def enrich_by_npi(request):
     """
-    Gemini + Google Search Grounding.
-    Pass 1: agresiv – merr sa më shumë fusha (edhe me low confidence).
-    Pass 2: nëse mungojnë data, një thirrje e dytë vetëm për data.
-    Pass 3: deep-fill education/graduate me .edu/PDF nëse s’janë të plota.
-    Në fund: nëse settings.SAVE_CAPTURE=True, ruaj payload në DB.
+    DB-first: nëse ka EnrichmentCapture të freskët për këtë NPI → kthe direkt nga DB.
+    Nëse only_cache=1 → mos bëj thirrje të jashtme (kthe hit/stale/miss).
+    Përndryshe, vazhdo me Pass1/Pass2/Pass3 dhe ruaj rezultatin në DB (nëse SAVE_CAPTURE=True).
     """
     from google import genai
     from google.genai import types
+    from datetime import datetime, timedelta, timezone
 
     npi = request.GET.get("npi")
     name_hint = request.GET.get("name") or ""
     if not npi:
         return Response({"detail": "npi required"}, status=400)
+
+    # ── DB-FIRST guard ───────────────────────────────────────────────────
+    only_cache = (request.GET.get("only_cache") or "0") == "1"
+    try:
+        max_age = int(request.GET.get("max_age") or str(7 * 24 * 3600))  # default: 7 ditë
+    except ValueError:
+        max_age = 7 * 24 * 3600
+
+    def _is_fresh_dt(dt, ttl=max_age):
+        try:
+            return (datetime.now(timezone.utc) - dt) <= timedelta(seconds=ttl)
+        except Exception:
+            return False
+
+    last = (
+        EnrichmentCapture.objects
+        .filter(npi=str(npi))
+        .only("job_id", "created_at", "payload", "quality")
+        .order_by("-created_at")
+        .first()
+    )
+
+    if last and _is_fresh_dt(last.created_at, ttl=max_age):
+        # Cache HIT → kthe direkt nga DB, pa thirrje të jashtme
+        return Response({
+            "detail": "ok",
+            "parsed": last.payload or {},
+            "quality": last.quality or {},
+            "cache_status": "hit",
+            "job_id": str(last.job_id),
+            "created_at": last.created_at.isoformat(),
+        })
+
+    if only_cache:
+        # Kërkohet rreptësisht cache → mos godit burime të jashtme
+        return Response({
+            "detail": "ok",
+            "parsed": (last.payload if last else {}) or {},
+            "quality": (last.quality if last else {}) or {},
+            "cache_status": "stale" if last else "miss",
+            "job_id": str(last.job_id) if last else None,
+            "created_at": last.created_at.isoformat() if last else None,
+        })
+    # ─────────────────────────────────────────────────────────────────────
 
     # seed nga npi_lookup
     npi_seed: Dict[str, Any] = {}
@@ -402,7 +446,12 @@ def enrich_by_npi(request):
         payload = _enrich_fake_payload(npi_seed, npi)
         if getattr(settings, "SAVE_CAPTURE", False):
             _save_capture(npi, name_hint, payload, payload.get("quality"), status="OK_FAKE")
-        return Response({"detail": "ok", "parsed": payload, "quality": payload["quality"]})
+        return Response({
+            "detail": "ok",
+            "parsed": payload,
+            "quality": payload["quality"],
+            "cache_status": "fresh",
+        })
 
     # ── genai client & tools ────────────────────────────────────────────────
     api_key = os.environ.get("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", None)
@@ -573,7 +622,6 @@ Normalize dates to YYYY-MM or YYYY.
                         date_keys=("issue_date", "expiry_date", "start", "end", "date", "graduated")
                     )
             except Exception:
-                # nëse patch-i vjen si tekst i lirë ose listë strings, thjesht anashkaloje
                 pass
 
     # PASS 3 – deep fill education/graduate nëse duhen
@@ -647,13 +695,12 @@ and try to populate institution, degree, city, state, country, start, end, gradu
             except Exception:
                 pass
 
-    # Validim & kthim — dhe RUAN nëse është aktiv
+    # Validim & RUAN (nëse SAVE_CAPTURE=True)
     try:
         ser = ResumePayloadSer(data=data)
         ser.is_valid(raise_exception=True)
 
         quality = data.get("quality") or {"completeness_score": 0.7, "confidence_score": 0.9}
-        # nëse vlerat vijnë si % (p.sh. 85), ktheje në [0..1]
         for k in ("completeness_score", "confidence_score"):
             v = quality.get(k)
             if isinstance(v, (int, float)) and v > 1:
@@ -662,16 +709,24 @@ and try to populate institution, degree, city, state, country, start, end, gradu
         if getattr(settings, "SAVE_CAPTURE", False):
             _save_capture(npi, name_hint, ser.data, quality, status="OK")
 
-        return Response({"detail": "ok", "parsed": ser.data, "quality": quality})
+        return Response({
+            "detail": "ok",
+            "parsed": ser.data,
+            "quality": quality,
+            "cache_status": "fresh",
+        })
 
     except Exception:
         # edhe në error validimi — ruaj çfarë ke
         if getattr(settings, "SAVE_CAPTURE", False):
             _save_capture(npi, name_hint, data, data.get("quality") or {}, status="PARTIAL")
-        return Response({"detail": "ok (partial-validated)", "parsed": data, "quality": data.get("quality") or {}})
+        return Response({
+            "detail": "ok (partial-validated)",
+            "parsed": data,
+            "quality": data.get("quality") or {},
+            "cache_status": "fresh",
+        })
 
-
-# --- Captures list/get views ---
 
 @api_view(["GET"])
 def list_captures(request):
