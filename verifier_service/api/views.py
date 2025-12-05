@@ -28,10 +28,6 @@ GENAI_MODEL_DEFAULT = os.getenv("GENAI_MODEL", "gemini-2.5-flash")
 # ───────────────────────── HELPERS TË PËRBASHKËTA ─────────────────────────
 
 def _resp_to_text(resp) -> str:
-    """
-    Nxjerr tekst nga përgjigja e google-genai në mënyrë të qëndrueshme.
-    Mbështet: resp.text, resp.output_text, dhe candidates[*].content.parts[*].text
-    """
     raw = getattr(resp, "text", None) or getattr(resp, "output_text", None)
     if raw:
         return str(raw)
@@ -58,9 +54,7 @@ def _strip_md_fences(text: str) -> str:
 
 
 def _json_relaxed(s: str):
-    """
-    Provo json.loads; në dështim, izolo bllokun e parë {…} më të jashtëm.
-    """
+    
     try:
         return json.loads(s)
     except Exception:
@@ -75,10 +69,7 @@ def _json_relaxed(s: str):
 
 
 def _normalize_section_rows(rows: Any, date_keys: Tuple[str, ...]) -> List[Dict[str, Any]]:
-    """
-    Kthen vetëm rreshta që janë dict; normalizon datat me parse_resume_date.
-    Ignoron elementët që s'janë dict (p.sh. string 'N/A', '—', etj).
-    """
+    
     if not isinstance(rows, list):
         return []
     cleaned: List[Dict[str, Any]] = []
@@ -86,23 +77,27 @@ def _normalize_section_rows(rows: Any, date_keys: Tuple[str, ...]) -> List[Dict[
         if not isinstance(row, dict):
             # skip çdo element jo-dict
             continue
+
         # normalizo datat
         for k in date_keys:
             if row.get(k):
                 row[k] = parse_resume_date(row[k]) or row[k]
+
+        # 🔴 FILTER: rreshtat me më pak se 2 fusha jo-bosh i heqim
+        non_empty_keys = [k for k, v in row.items() if v not in (None, "", [], {})]
+        if len(non_empty_keys) < 2:
+            # p.sh. row = {"graduated": "2002-01-01"} → SKIP
+            continue
+
         cleaned.append(row)
     return cleaned
 
 
 def _merge_rows_by_key(base_rows: Any, patch_rows: Any, key_fields: List[str]) -> List[Dict[str, Any]]:
-    """
-    Bashkon rreshta me çelësa unikë bazuar në key_fields.
-    Preferon të ruajë vlerat ekzistuese; plotëson vetëm fushat bosh.
-    """
+
     base = base_rows if isinstance(base_rows, list) else []
     patch = patch_rows if isinstance(patch_rows, list) else []
 
-    # Lejo vetëm dict
     base = [r for r in base if isinstance(r, dict)]
     patch = [r for r in patch if isinstance(r, dict)]
 
@@ -117,7 +112,7 @@ def _merge_rows_by_key(base_rows: Any, patch_rows: Any, key_fields: List[str]) -
             base.append(pr)
             idx[kk] = pr
             continue
-        # plotëso boshët
+
         for dk in (
             "start", "end", "issue_date", "expiry_date", "date",
             "graduated", "program_type", "status", "city", "state", "country",
@@ -130,6 +125,7 @@ def _merge_rows_by_key(base_rows: Any, patch_rows: Any, key_fields: List[str]) -
 
 
 def _has_any_dates(rows: Any, keys: Tuple[str, ...] = ("start", "end", "issue_date", "expiry_date", "date")) -> bool:
+
     rows = rows if isinstance(rows, list) else []
     for r in rows:
         if not isinstance(r, dict):
@@ -157,7 +153,7 @@ def _save_capture(npi: str, name_hint: str, payload: dict, quality: dict,
 
 def _enrich_fake_payload(npi_seed: Dict[str, Any], npi: str) -> Dict[str, Any]:
     """
-    Payload demo kur ENRICH_FAKE=true (për zhvillim).
+    Payload demo
     """
     return {
         "informations": {
@@ -189,8 +185,6 @@ def _enrich_fake_payload(npi_seed: Dict[str, Any], npi: str) -> Dict[str, Any]:
 
 # ─────────────────────────────── VIEWS ───────────────────────────────
 
-# ───────────────────────── VIEWS ─────────────────────────
-
 @api_view(["GET"])
 def health(request):
     return Response({"ok": True})
@@ -198,9 +192,8 @@ def health(request):
 
 @api_view(["GET"])
 def npi_lookup(request):
-    """
-    Lookup bazik nga NPI Registry (JSON zyrtar). Kthehet si rezultat minimal bazë.
-    """
+
+
     npi = request.GET.get("npi")
     if not npi:
         return Response({"detail": "npi required"}, status=400)
@@ -242,8 +235,7 @@ def npi_lookup(request):
 @parser_classes([MultiPartParser, FormParser])
 def parse_resume(request):
     """
-    Parsim CV PDF → JSON sipas skemës. Opsionalisht merge me NPI (?npi=...).
-    Përdor google-genai PA tools, ndaj lejohet response_mime_type="application/json".
+    Parsim CV PDF → JSON sipas skemës.
     """
     f = request.FILES.get("file")
     if not f:
@@ -264,7 +256,7 @@ def parse_resume(request):
         except Exception:
             pass
 
-    # ekstrakto tekst nga PDF
+
     try:
         text = extract_pdf_text(f)
         if not text.strip():
@@ -272,7 +264,7 @@ def parse_resume(request):
     except Exception as e:
         return Response({"detail": f"extract failed: {e}"}, status=500)
 
-    # dev fake
+
     if getattr(settings, "ENRICH_FAKE", False):
         payload = {
             "informations": {
@@ -295,7 +287,8 @@ def parse_resume(request):
             }],
             "quality": {"completeness_score": 0.78, "confidence_score": 0.8}
         }
-        ser = ResumePayloadSer(data=payload); ser.is_valid(raise_exception=True)
+        ser = ResumePayloadSer(data=payload)
+        ser.is_valid(raise_exception=True)
         return Response({"detail": "ok", "parsed": ser.data, "quality": payload.get("quality")})
 
     api_key = os.environ.get("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", None)
@@ -358,7 +351,8 @@ If unsure, omit.
             **(info or {}),
             **{k: v for k, v in (base_info or {}).items() if v}
         }
-        ser = ResumePayloadSer(data=data); ser.is_valid(raise_exception=True)
+        ser = ResumePayloadSer(data=data)
+        ser.is_valid(raise_exception=True)
         quality = data.get("quality") or {"completeness_score": 0.8, "confidence_score": 0.75}
         return Response({"detail": "ok", "parsed": ser.data, "quality": quality})
 
@@ -370,11 +364,7 @@ If unsure, omit.
 
 @api_view(["GET"])
 def enrich_by_npi(request):
-    """
-    DB-first: nëse ka EnrichmentCapture të freskët për këtë NPI → kthe direkt nga DB.
-    Nëse only_cache=1 → mos bëj thirrje të jashtme (kthe hit/stale/miss).
-    Përndryshe, vazhdo me Pass1/Pass2/Pass3 dhe ruaj rezultatin në DB (nëse SAVE_CAPTURE=True).
-    """
+
     from google import genai
     from google.genai import types
     from datetime import datetime, timedelta, timezone
@@ -406,7 +396,7 @@ def enrich_by_npi(request):
     )
 
     if last and _is_fresh_dt(last.created_at, ttl=max_age):
-        # Cache HIT → kthe direkt nga DB, pa thirrje të jashtme
+
         return Response({
             "detail": "ok",
             "parsed": last.payload or {},
@@ -417,7 +407,7 @@ def enrich_by_npi(request):
         })
 
     if only_cache:
-        # Kërkohet rreptësisht cache → mos godit burime të jashtme
+
         return Response({
             "detail": "ok",
             "parsed": (last.payload if last else {}) or {},
@@ -428,7 +418,6 @@ def enrich_by_npi(request):
         })
     # ─────────────────────────────────────────────────────────────────────
 
-    # seed nga npi_lookup
     npi_seed: Dict[str, Any] = {}
     try:
         base = npi_lookup(request._request)
@@ -453,7 +442,7 @@ def enrich_by_npi(request):
             "cache_status": "fresh",
         })
 
-    # ── genai client & tools ────────────────────────────────────────────────
+    # ── genai client & tools (ONE-SHOT PROMPT) ────────────────────────────────
     api_key = os.environ.get("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", None)
     if not api_key:
         return Response({"detail": "GEMINI_API_KEY missing"}, status=500)
@@ -462,277 +451,217 @@ def enrich_by_npi(request):
     model_name = os.getenv("GENAI_MODEL", GENAI_MODEL_DEFAULT)
     tools = [types.Tool(google_search=types.GoogleSearch())]
 
-    # PASS 1
-    cfg_pass1 = types.GenerateContentConfig(tools=tools, temperature=0.25)
-    prompt_pass1 = f"""
-You are a web-grounded extraction agent. Using Google Search, find public info
-for physician with NPI = {npi} (name hint: {name_hint or "unknown"}).
+    try:
+        npi_seed_json = json.dumps(npi_seed, ensure_ascii=False)
+    except Exception:
+        npi_seed_json = "{}"
 
-Return JSON ONLY with this exact schema:
-{{
-  "informations": {{
-    "legalfirstname":"", "legallastname":"", "legalmiddlename":"", "npinumber":"",
-    "phone":"", "address":"", "address2":"", "city":"", "stateprovince":"", "zipcode":"",
-    "mailaddress":"", "mailaddress2":"", "mailcity":"", "mailingstateprovince":"", "mailingzipcode":"",
-    "role":"", "gender":"", "specialization":"", "skills":"", "total_experience_years":""
-  }},
-  "education":[], "medical_education":[], "graduate_school":[],
-  "internship":[], "residency":[], "fellowship":[],
-  "board_certifications":[], "medical_licences":[], "dea_registration":[],
-  "other_exams":[], "professional_reference":[],
-  "quality":{{"completeness_score":0,"confidence_score":0}}
-}}
-
-Be aggressive filling fields. Prefer authoritative sources. JSON only.
-""".strip()
-
-    resp1 = client.models.generate_content(
-        model=model_name,
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt_pass1)])],
-        config=cfg_pass1,
+    cfg = types.GenerateContentConfig(
+        tools=tools,
+        temperature=0.25, 
     )
-    raw1 = _strip_md_fences(_resp_to_text(resp1))
-    if not raw1:
-        return Response({"detail": "enrich failed: empty model response"}, status=502)
+
+    
+    prompt = f"""
+You are a web-grounded medical provider data extraction agent.
+
+Use Google Search (NPPES, hospital profiles, CVs, .edu domains, PDFs, etc.)
+to build a structured public profile for the provider with:
+
+- NPI: {npi}
+- Name hint: "{name_hint or "unknown"}"
+
+You are also given context directly from the official NPI registry:
+NPI_REGISTRY_CONTEXT = {npi_seed_json}
+
+Your task is to return STRICT JSON (no markdown, no extra text) with
+this top-level structure and semantics:
+
+TOP-LEVEL KEYS (all lowercase):
+
+- "informations": SINGLE OBJECT with fields:
+    legalfirstname, legallastname, legalmiddlename,
+    npinumber, phone, address, address2, city, stateprovince, zipcode,
+    mailaddress, mailaddress2, mailcity, mailingstateprovince, mailingzipcode,
+    role, gender, specialization, skills, total_experience_years
+
+- "education": LIST of objects
+- "medical_education": LIST of objects
+- "graduate_school": LIST of objects
+  For each entry in these 3 lists use only these fields:
+    institution, degree, city, state, country, start, end, graduated
+
+- "internship", "residency", "fellowship": LIST of objects.
+  For each entry use only these fields:
+    institution, specialty, city, state, country, start, end, program_type
+
+- "board_certifications": LIST of objects with fields:
+    board, specialty, issue_date, expiry_date, status, certificate_id
+
+- "medical_licences": LIST of objects with fields:
+    state, number, issue_date, expiry_date, status, is_primary
+
+- "dea_registration": LIST of objects with fields:
+    dea_number, state, issue_date, expiry_date, status, schedules
+
+- "other_exams": LIST of objects with fields:
+    exam_name, score, date, passed, details
+
+- "professional_reference": LIST of objects with fields:
+    name, title, institution, phone, email, relationship
+
+- "quality": SINGLE OBJECT with fields:
+    completeness_score, confidence_score
+  Both completeness_score and confidence_score MUST be between 0 and 1.
+
+IMPORTANT NORMALIZATION RULES:
+
+1) PHONE:
+   - Normalize phones to the E.164-like format "+1XXXXXXXXXX" when possible.
+   - If you cannot normalize, leave phone empty.
+
+2) DATES:
+   - Normalize dates to "YYYY-MM-DD" when exact, or "YYYY-MM" / "YYYY" if only partial.
+   - For start/end, prefer YYYY-MM or YYYY-MM-DD.
+   - For issue_date / expiry_date, do the same.
+   - If date is unknown or ambiguous, omit the field entirely.
+
+3) GROUPING (NO DUPLICATE HALF-ENTRIES):
+   - Each object in education/medical_education/graduate_school/internship/residency/fellowship
+     MUST represent ONE logical program (one degree or one training program).
+   - NEVER split a single program into two separate objects.
+     Example of BAD behavior (do NOT do this):
+       - Object A: {{ "institution": "Howard University", "degree": "MD" }}
+       - Object B: {{ "graduated": "2002-01-01" }}
+     Instead you MUST MERGE these into ONE object:
+       - {{ "institution": "Howard University", "degree": "MD", "graduated": "2002-01-01" }}
+
+   - If you find additional info for the same program later (same institution AND same degree,
+     or clearly the same program), MERGE it into the SAME object, do NOT create a new one.
+
+4) MINIMAL COMPLETENESS FOR ROWS:
+   - For any entry in education/medical_education/graduate_school:
+       Include the object ONLY if you know at least TWO of these:
+         institution, degree, city, state, start, end, graduated.
+       If you only know 1 small fact (e.g., just "graduated"), DO NOT emit that entry.
+
+   - For internship/residency/fellowship:
+       Include the object ONLY if you know at least TWO of:
+         institution, specialty, city, state, start, end, program_type.
+
+   - For medical_licences / board_certifications:
+       Include the object ONLY if you know at least TWO of:
+         state/board, number/specialty/status, or issue_date/expiry_date.
+
+   - In general, AVOID creating "half-empty" rows with a single trivial field.
+
+5) INFORMATIONS MERGE:
+   - Use NPI_REGISTRY_CONTEXT as authoritative for npinumber and base address/phone.
+   - You MAY refine phone, gender, specialization, and skills if you find better data.
+   - npinumber MUST be the 10-digit NPI for this provider.
+   - You may enrich specialization with more detailed specialties.
+
+6) QUALITY:
+   - Set completeness_score to your estimate of how complete the overall profile is (0 to 1).
+   - Set confidence_score to your overall confidence in the extracted data (0 to 1).
+
+7) OUTPUT:
+   - RETURN ONLY VALID JSON. NO markdown code fences. NO comments. NO extra keys.
+   - All top-level keys must exist (you can use [] for empty lists).
+"""
+
+    data: Dict[str, Any] = {}
 
     try:
-        data = _json_relaxed(raw1)
-    except json.JSONDecodeError as e:
-        return Response({"detail": f"json decode failed (pass1): {e}"}, status=502)
-
-    # Normalizime bazë – info
-    info = (data.get("informations") or {})
-    if "phone" in info:
-        info["phone"] = clean_phone_number(info["phone"])
-    info["npinumber"] = re.sub(r"\D", "", str(info.get("npinumber") or npi))[:10]
-    data["informations"] = {**{k: v for k, v in (npi_seed or {}).items() if v}, **(info or {})}
-
-    # Normalizo seksionet (dict-only + datat)
-    for section in (
-        "education", "medical_education", "graduate_school", "internship",
-        "residency", "fellowship", "board_certifications", "medical_licences",
-        "dea_registration", "other_exams", "professional_reference"
-    ):
-        data[section] = _normalize_section_rows(
-            data.get(section),
-            date_keys=("issue_date", "expiry_date", "start", "end", "date")
-        )
-
-    # PASS 2 – vetëm date/status nëse mungojnë
-    need_repair = {
-        "education":            not _has_any_dates(data.get("education")),
-        "medical_education":    not _has_any_dates(data.get("medical_education")),
-        "graduate_school":      not _has_any_dates(data.get("graduate_school")),
-        "internship":           not _has_any_dates(data.get("internship")),
-        "residency":            not _has_any_dates(data.get("residency")),
-        "fellowship":           not _has_any_dates(data.get("fellowship")),
-        "board_certifications": not _has_any_dates(data.get("board_certifications")),
-        "medical_licences":     not _has_any_dates(data.get("medical_licences")),
-    }
-
-    if any(need_repair.values()):
-        def _mk_hint_list(section_name: str, rows: Any, keys: List[str]) -> str:
-            out = []
-            rows = rows if isinstance(rows, list) else []
-            for r in rows:
-                if not isinstance(r, dict):
-                    continue
-                parts = []
-                for k in keys:
-                    v = (r.get(k) or "").strip()
-                    if v:
-                        parts.append(f"{k}={v}")
-                if parts:
-                    out.append("{" + ", ".join(parts) + "}")
-            return f'"{section_name}": [{", ".join(out)}]'
-
-        hints = []
-        hints.append(_mk_hint_list("education", data.get("education"), ["institution", "degree", "city", "state"]))
-        hints.append(_mk_hint_list("medical_education", data.get("medical_education"), ["institution", "degree", "city", "state"]))
-        hints.append(_mk_hint_list("graduate_school", data.get("graduate_school"), ["institution", "degree", "city", "state"]))
-        hints.append(_mk_hint_list("internship", data.get("internship"), ["institution", "specialty", "city", "state", "program_type"]))
-        hints.append(_mk_hint_list("residency", data.get("residency"), ["institution", "specialty", "city", "state", "program_type"]))
-        hints.append(_mk_hint_list("fellowship", data.get("fellowship"), ["institution", "specialty", "city", "state", "program_type"]))
-        hints.append(_mk_hint_list("board_certifications", data.get("board_certifications"), ["board", "specialty", "status"]))
-        hints.append(_mk_hint_list("medical_licences", data.get("medical_licences"), ["state", "number", "status"]))
-        hint_block = ",\n".join([h for h in hints if h])
-
-        cfg_pass2 = types.GenerateContentConfig(tools=tools, temperature=0.15)
-        prompt_pass2 = f"""
-Using Google Search, fetch ONLY missing date/status fields for NPI={npi} (name hint: {name_hint or "unknown"}).
-Context:
-{{
-{hint_block}
-}}
-Return JSON only with same section names, including fields:
-- start, end, graduated, program_type, issue_date, expiry_date, status, number.
-Normalize dates to YYYY-MM or YYYY.
-""".strip()
-
-        resp2 = client.models.generate_content(
+        resp = client.models.generate_content(
             model=model_name,
-            contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt_pass2)])],
-            config=cfg_pass2,
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+            config=cfg,
         )
-        raw2 = _strip_md_fences(_resp_to_text(resp2))
-        if raw2:
-            try:
-                patch = _json_relaxed(raw2)
+        raw = _strip_md_fences(_resp_to_text(resp))
+        if not raw:
+            return Response({"detail": "enrich failed: empty model response"}, status=502)
 
-                data["education"] = _merge_rows_by_key(
-                    data.get("education") or [], patch.get("education") or [],
-                    ["institution", "degree", "city", "state"]
-                )
-                data["medical_education"] = _merge_rows_by_key(
-                    data.get("medical_education") or [], patch.get("medical_education") or [],
-                    ["institution", "degree", "city", "state"]
-                )
-                data["graduate_school"] = _merge_rows_by_key(
-                    data.get("graduate_school") or [], patch.get("graduate_school") or [],
-                    ["institution", "degree", "city", "state"]
-                )
-                data["internship"] = _merge_rows_by_key(
-                    data.get("internship") or [], patch.get("internship") or [],
-                    ["institution", "specialty", "city", "state", "program_type"]
-                )
-                data["residency"] = _merge_rows_by_key(
-                    data.get("residency") or [], patch.get("residency") or [],
-                    ["institution", "specialty", "city", "state", "program_type"]
-                )
-                data["fellowship"] = _merge_rows_by_key(
-                    data.get("fellowship") or [], patch.get("fellowship") or [],
-                    ["institution", "specialty", "city", "state", "program_type"]
-                )
-                data["board_certifications"] = _merge_rows_by_key(
-                    data.get("board_certifications") or [], patch.get("board_certifications") or [],
-                    ["board", "specialty", "status"]
-                )
-                data["medical_licences"] = _merge_rows_by_key(
-                    data.get("medical_licences") or [], patch.get("medical_licences") or [],
-                    ["state", "number", "status"]
-                )
+        data = _json_relaxed(raw)
 
-                # normalizo datat pasi u merge-uan
-                for section in (
-                    "education", "medical_education", "graduate_school", "internship",
-                    "residency", "fellowship", "board_certifications", "medical_licences"
-                ):
-                    data[section] = _normalize_section_rows(
-                        data.get(section),
-                        date_keys=("issue_date", "expiry_date", "start", "end", "date", "graduated")
-                    )
-            except Exception:
-                pass
+        # ── Normalizime bazë për 'informations' ─────────────────────────
+        info = (data.get("informations") or {}) if isinstance(data, dict) else {}
+        if "phone" in info:
+            info["phone"] = clean_phone_number(info["phone"])
+        # siguro npinumber 10-shifror
+        info["npinumber"] = re.sub(r"\D", "", str(info.get("npinumber") or npi))[:10]
 
-    # PASS 3 – deep fill education/graduate nëse duhen
-    def _education_incomplete(rows: Any) -> bool:
-        rows = rows if isinstance(rows, list) else []
-        if not rows:
-            return True
-        for r in rows:
-            if not isinstance(r, dict):
-                return True
-            if not (r.get("institution") or r.get("degree")):
-                return True
-            if not (r.get("city") or r.get("state") or r.get("start") or r.get("end")):
-                return True
-        return False
+        # merge me seed nga NPI registry (seed → fallback, info nga Gemini → mund të override)
+        data["informations"] = {
+            **{k: v for k, v in (npi_seed or {}).items() if v},
+            **(info or {}),
+        }
 
-    if _education_incomplete(data.get("education")) or \
-       _education_incomplete(data.get("graduate_school")) or \
-       _education_incomplete(data.get("medical_education")):
+        # ── Normalizo seksionet me helper-in e ri (_normalize_section_rows) ──
+        for section in (
+            "education", "medical_education", "graduate_school", "internship",
+            "residency", "fellowship", "board_certifications", "medical_licences",
+            "dea_registration", "other_exams", "professional_reference",
+        ):
+            data[section] = _normalize_section_rows(
+                data.get(section),
+                date_keys=("issue_date", "expiry_date", "start", "end", "date", "graduated"),
+            )
 
-        edu_hint = []
-        for sec in ("education", "graduate_school", "medical_education"):
-            rows = data.get(sec) or []
-            for r in rows:
-                if not isinstance(r, dict):
-                    continue
-                parts = []
-                for k in ("institution", "degree", "city", "state", "country"):
-                    v = (r.get(k) or "").strip()
-                    if v:
-                        parts.append(f"{k}={v}")
-                if parts:
-                    edu_hint.append("{" + ", ".join(parts) + "}")
-        edu_context = ", ".join(edu_hint)
-
-        cfg_pass3 = types.GenerateContentConfig(tools=tools, temperature=0.3)
-        prompt_pass3 = f"""
-Deep-fill EDUCATION/GRADUATE for NPI={npi} (name: {name_hint or "unknown"}).
-Prefer .edu domains and PDF CVs. Given: [{edu_context}]
-Return JSON only with sections education, medical_education, graduate_school
-and try to populate institution, degree, city, state, country, start, end, graduated.
-""".strip()
-
-        resp3 = client.models.generate_content(
-            model=model_name,
-            contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt_pass3)])],
-            config=cfg_pass3,
-        )
-        raw3 = _strip_md_fences(_resp_to_text(resp3))
-        if raw3:
-            try:
-                patch3 = _json_relaxed(raw3)
-                data["education"] = _merge_rows_by_key(
-                    data.get("education") or [], patch3.get("education") or [],
-                    ["institution", "degree", "city", "state"]
-                )
-                data["medical_education"] = _merge_rows_by_key(
-                    data.get("medical_education") or [], patch3.get("medical_education") or [],
-                    ["institution", "degree", "city", "state"]
-                )
-                data["graduate_school"] = _merge_rows_by_key(
-                    data.get("graduate_school") or [], patch3.get("graduate_school") or [],
-                    ["institution", "degree", "city", "state"]
-                )
-
-                for section in ("education", "medical_education", "graduate_school"):
-                    data[section] = _normalize_section_rows(
-                        data.get(section),
-                        date_keys=("start", "end", "graduated")
-                    )
-            except Exception:
-                pass
-
-    # Validim & RUAN (nëse SAVE_CAPTURE=True)
-    try:
-        ser = ResumePayloadSer(data=data)
-        ser.is_valid(raise_exception=True)
-
+        # Siguro që 'quality' ekziston dhe është në [0,1]
         quality = data.get("quality") or {"completeness_score": 0.7, "confidence_score": 0.9}
         for k in ("completeness_score", "confidence_score"):
             v = quality.get(k)
-            if isinstance(v, (int, float)) and v > 1:
-                quality[k] = round(float(v) / 100.0, 3)
+            if isinstance(v, (int, float)):
+                if v > 1:
+                    quality[k] = round(float(v) / 100.0, 3)
+                else:
+                    quality[k] = float(v)
+            else:
+                quality[k] = 0.7 if k == "completeness_score" else 0.9
+        data["quality"] = quality
+
+        # ── Validim & RUAN (e njëjta logjikë si më parë) ─────────────────
+        try:
+            ser = ResumePayloadSer(data=data)
+            ser.is_valid(raise_exception=True)
+
+            if getattr(settings, "SAVE_CAPTURE", False):
+                _save_capture(npi, name_hint, ser.data, quality, status="OK")
+
+            return Response({
+                "detail": "ok",
+                "parsed": ser.data,
+                "quality": quality,
+                "cache_status": "fresh",
+            })
+
+        except Exception:
+            # edhe në error validimi — ruaj çfarë ke
+            if getattr(settings, "SAVE_CAPTURE", False):
+                _save_capture(npi, name_hint, data, quality, status="PARTIAL")
+            return Response({
+                "detail": "ok (partial-validated)",
+                "parsed": data,
+                "quality": quality,
+                "cache_status": "fresh",
+            })
+
+    except json.JSONDecodeError as e:
+        return Response({"detail": f"json decode failed: {e}"}, status=502)
+    except Exception as e:
 
         if getattr(settings, "SAVE_CAPTURE", False):
-            _save_capture(npi, name_hint, ser.data, quality, status="OK")
-
-        return Response({
-            "detail": "ok",
-            "parsed": ser.data,
-            "quality": quality,
-            "cache_status": "fresh",
-        })
-
-    except Exception:
-        # edhe në error validimi — ruaj çfarë ke
-        if getattr(settings, "SAVE_CAPTURE", False):
-            _save_capture(npi, name_hint, data, data.get("quality") or {}, status="PARTIAL")
-        return Response({
-            "detail": "ok (partial-validated)",
-            "parsed": data,
-            "quality": data.get("quality") or {},
-            "cache_status": "fresh",
-        })
+            try:
+                _save_capture(npi, name_hint, data if isinstance(data, dict) else {}, {}, status="ERROR")
+            except Exception:
+                pass
+        return Response({"detail": f"enrich failed: {e}"}, status=500)
 
 
 @api_view(["GET"])
 def list_captures(request):
-    """
-    Liston deri në 50 ruajtjet e fundit. Filtrim opsional me ?npi=...
-    """
+    
     npi = request.GET.get("npi")
     qs = EnrichmentCapture.objects.all()
     if npi:
@@ -752,9 +681,7 @@ def list_captures(request):
 
 @api_view(["GET"])
 def get_capture(request, job_id):
-    """
-    Merr një ruajtje me job_id (uuid).
-    """
+    
     try:
         r = EnrichmentCapture.objects.get(job_id=job_id)
     except EnrichmentCapture.DoesNotExist:
