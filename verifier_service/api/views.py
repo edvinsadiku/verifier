@@ -68,7 +68,7 @@ def _json_relaxed(s: str):
     raise json.JSONDecodeError("Could not parse JSON", s, 0)
 
 
-def _normalize_section_rows(rows: Any, date_keys: Tuple[str, ...]) -> List[Dict[str, Any]]:
+def _normalize_section_rows(rows: Any, date_keys: Tuple[str, ...], min_fields: int = 2) -> List[Dict[str, Any]]:
     
     if not isinstance(rows, list):
         return []
@@ -78,14 +78,18 @@ def _normalize_section_rows(rows: Any, date_keys: Tuple[str, ...]) -> List[Dict[
             # skip çdo element jo-dict
             continue
 
+        # normalize zip -> zipcode
+        if row.get("zip") and not row.get("zipcode"):
+            row["zipcode"] = row.get("zip")
+
         # normalizo datat
         for k in date_keys:
             if row.get(k):
                 row[k] = parse_resume_date(row[k]) or row[k]
 
-        # 🔴 FILTER: rreshtat me më pak se 2 fusha jo-bosh i heqim
+        # 🔴 FILTER: rreshtat me më pak se min_fields fusha jo-bosh i heqim
         non_empty_keys = [k for k, v in row.items() if v not in (None, "", [], {})]
-        if len(non_empty_keys) < 2:
+        if len(non_empty_keys) < min_fields:
             # p.sh. row = {"graduated": "2002-01-01"} → SKIP
             continue
 
@@ -139,6 +143,119 @@ def _has_any_dates(rows: Any, keys: Tuple[str, ...] = ("start", "end", "issue_da
     return False
 
 
+def _normalize_clinical_preferences(value: Any) -> str:
+    if not value:
+        return ""
+
+    if isinstance(value, list):
+        items = [str(v).strip() for v in value if isinstance(v, (str, int, float))]
+    elif isinstance(value, str):
+        items = [v.strip() for v in value.split(",")]
+    else:
+        return ""
+
+    # dedupe, keep order, drop empties
+    seen = set()
+    out: List[str] = []
+    for v in items:
+        if not v:
+            continue
+        key = v.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(v)
+    return ", ".join(out)
+
+
+def _normalize_digital_passport(payload: Any) -> List[Dict[str, str]]:
+    if not payload:
+        return []
+
+    items = payload if isinstance(payload, list) else [payload]
+
+    def _split_list(value: Any) -> List[str]:
+        if not value:
+            return []
+        if isinstance(value, list):
+            raw = []
+            for v in value:
+                raw.extend(str(v).split(","))
+        else:
+            raw = str(value).split(",")
+        out: List[str] = []
+        seen = set()
+        for v in raw:
+            s = v.strip()
+            if not s:
+                continue
+            key = s.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s)
+        return out
+
+    def _to_str(v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            # join list values with comma
+            return ", ".join([str(x).strip() for x in v if str(x).strip()])
+        return str(v).strip()
+
+    fields = (
+        "hospital_affiliation",
+        "licence_number",
+        "consultation_hours",
+        "available_locations",
+        "state",
+        "zipcode",
+        "address",
+        "address2",
+        "city",
+    )
+
+    out: List[Dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        row: Dict[str, str] = {}
+
+        # allow "zip" fallback
+        if not item.get("zipcode") and item.get("zip"):
+            item = {**item, "zipcode": item.get("zip")}
+
+        for f in fields:
+            v = item.get(f)
+            if f == "available_locations":
+                v = _normalize_clinical_preferences(v)
+            else:
+                v = _to_str(v)
+            if v:
+                row[f] = v
+
+        if not row:
+            continue
+
+        # Split multi-affiliations / licenses into separate rows
+        affs = _split_list(row.get("hospital_affiliation"))
+        lics = _split_list(row.get("licence_number"))
+        if len(affs) <= 1 and len(lics) <= 1:
+            out.append(row)
+            continue
+
+        n = max(len(affs), len(lics))
+        for i in range(n):
+            new_row = dict(row)
+            if affs:
+                new_row["hospital_affiliation"] = affs[i] if i < len(affs) else affs[-1]
+            if lics:
+                new_row["licence_number"] = lics[i] if i < len(lics) else lics[-1]
+            out.append(new_row)
+    return out
+
+
 def _save_capture(npi: str, name_hint: str, payload: dict, quality: dict,
                   status: str = "ready", pass_stats: Optional[dict] = None):
     return EnrichmentCapture.objects.create(
@@ -179,6 +296,19 @@ def _enrich_fake_payload(npi_seed: Dict[str, Any], npi: str) -> Dict[str, Any]:
         "dea_registration": [],
         "other_exams": [],
         "professional_reference": [],
+        "preferences": {
+            "clinicalpreferences": "General Surgery, Internal Medicine",
+        },
+        "digital_passport": [{
+            "hospital_affiliation": "Demo Hospital",
+            "licence_number": "HOSP-12345",
+            "consultation_hours": "Mon-Fri 9am-5pm",
+            "available_locations": "Boston, MA",
+            "state": "MA",
+            "zipcode": "02118",
+            "address": "100 Main St",
+            "city": "Boston",
+        }],
         "quality": {"completeness_score": 0.7, "confidence_score": 0.7},
     }
 
@@ -271,6 +401,19 @@ def parse_resume(request):
                 **base_info,
                 "phone": clean_phone_number(base_info.get("phone") or "+1 (212) 555-0100"),
             },
+            "preferences": {
+                "clinicalpreferences": "General Surgery, Internal Medicine",
+            },
+            "digital_passport": [{
+                "hospital_affiliation": "Demo Hospital",
+                "licence_number": "HOSP-12345",
+                "consultation_hours": "Mon-Fri 9am-5pm",
+                "available_locations": "Boston, MA",
+                "state": "MA",
+                "zipcode": "02118",
+                "address": "100 Main St",
+                "city": "Boston",
+            }],
             "medical_education": [{
                 "institution": "Demo Medical School", "degree": "MD",
                 "city": "Boston", "state": "MA", "country": "US",
@@ -307,13 +450,18 @@ Return VALID JSON only. Omit fields you are not confident about.
 Normalize phones to +1XXXXXXXXXX and dates to YYYY-MM-DD when possible (else MM/YYYY).
 Allowed sections and fields (use only these exact keys):
 - informations: legalfirstname, legallastname, legalmiddlename, npinumber, phone, address, address2, city, stateprovince, zipcode, specialization, skills, total_experience_years
-- education/medical_education/graduate_school: institution, degree, city, state, country, start, end, graduated
-- internship/residency/fellowship: institution, specialty, city, state, country, start, end, program_type
+- preferences: clinicalpreferences
+- digital_passport: LIST of objects with fields hospital_affiliation, licence_number, consultation_hours, available_locations, state, zipcode, address, address2, city
+- education/medical_education/graduate_school: institution, degree, address, address2, city, state, zipcode, country, start, end, graduated
+- internship/residency/fellowship: institution, specialty, address, address2, city, state, zipcode, country, start, end, program_type
 - board_certifications: board, specialty, issue_date, expiry_date, status, certificate_id
 - medical_licences: state, number, issue_date, expiry_date, status, is_primary
 - dea_registration: dea_number, state, issue_date, expiry_date, status, schedules
 - other_exams: exam_name, score, date, passed, details
 - professional_reference: name, title, institution, phone, email, relationship
+For preferences.clinicalpreferences, return a comma-separated string of clinical capabilities.
+For digital_passport.available_locations, return a comma-separated list of locations.
+If an entry has an institution, try to provide its full address (address, city, state, zipcode, country, and address2 if available).
 If unsure, omit.
 """.strip() + "\n\n" + text[:15000]
 
@@ -342,15 +490,41 @@ If unsure, omit.
             "residency", "fellowship", "board_certifications", "medical_licences",
             "dea_registration", "other_exams", "professional_reference"
         ):
+            min_fields = 1 if section == "internship" else 2
             data[section] = _normalize_section_rows(
                 data.get(section),
-                date_keys=("issue_date", "expiry_date", "start", "end", "date")
+                date_keys=("issue_date", "expiry_date", "start", "end", "date"),
+                min_fields=min_fields,
             )
 
         data["informations"] = {
             **(info or {}),
             **{k: v for k, v in (base_info or {}).items() if v}
         }
+
+        prefs = data.get("preferences") or {}
+        cp = _normalize_clinical_preferences(prefs.get("clinicalpreferences") or data.get("clinicalpreferences"))
+        if cp:
+            prefs["clinicalpreferences"] = cp
+        data["preferences"] = prefs
+
+        dp_raw = data.get("digital_passport") or data.get("DigitalPassport") or {}
+        if not dp_raw:
+            dp_raw = {k: data.get(k) for k in (
+                "hospital_affiliation",
+                "licence_number",
+                "consultation_hours",
+                "available_locations",
+                "state",
+                "zipcode",
+                "address",
+                "address2",
+                "city",
+            ) if data.get(k)}
+        dp = _normalize_digital_passport(dp_raw)
+        if dp:
+            data["digital_passport"] = dp
+
         ser = ResumePayloadSer(data=data)
         ser.is_valid(raise_exception=True)
         quality = data.get("quality") or {"completeness_score": 0.8, "confidence_score": 0.75}
@@ -485,15 +659,24 @@ TOP-LEVEL KEYS (all lowercase):
     mailaddress, mailaddress2, mailcity, mailingstateprovince, mailingzipcode,
     role, gender, specialization, skills, total_experience_years
 
+- "preferences": SINGLE OBJECT with fields:
+    clinicalpreferences
+
+- "digital_passport": LIST of objects with fields:
+    hospital_affiliation, licence_number, consultation_hours, available_locations,
+    state, zipcode, address, address2, city
+
 - "education": LIST of objects
 - "medical_education": LIST of objects
 - "graduate_school": LIST of objects
   For each entry in these 3 lists use only these fields:
-    institution, degree, city, state, country, start, end, graduated
+    institution, degree, address, address2, city, state, zipcode, country, start, end, graduated
 
 - "internship", "residency", "fellowship": LIST of objects.
   For each entry use only these fields:
-    institution, specialty, city, state, country, start, end, program_type
+    institution, specialty, address, address2, city, state, zipcode, country, start, end, program_type
+  Note: Internship may be listed as "preliminary year", "rotating internship", or "PGY-1".
+  Note: Internship may be listed as "preliminary year", "rotating internship", or "PGY-1".
 
 - "board_certifications": LIST of objects with fields:
     board, specialty, issue_date, expiry_date, status, certificate_id
@@ -539,7 +722,15 @@ IMPORTANT NORMALIZATION RULES:
    - If you find additional info for the same program later (same institution AND same degree,
      or clearly the same program), MERGE it into the SAME object, do NOT create a new one.
 
-4) MINIMAL COMPLETENESS FOR ROWS:
+4) INSTITUTION ADDRESS COMPLETENESS (STRICT):
+   - For ANY entry that has an institution (education/medical_education/graduate_school/internship/residency/fellowship),
+     you MUST attempt to find the institution's full address using Google Search.
+   - Each emitted entry with institution MUST include at least:
+     address, city, state, zipcode (and country if available).
+   - If you cannot verify the address, OMIT THE ENTIRE ENTRY (do not return a partial row).
+   - Do NOT guess.
+
+5) MINIMAL COMPLETENESS FOR ROWS:
    - For any entry in education/medical_education/graduate_school:
        Include the object ONLY if you know at least TWO of these:
          institution, degree, city, state, start, end, graduated.
@@ -555,19 +746,26 @@ IMPORTANT NORMALIZATION RULES:
 
    - In general, AVOID creating "half-empty" rows with a single trivial field.
 
-5) INFORMATIONS MERGE:
+6) INFORMATIONS MERGE:
    - Use NPI_REGISTRY_CONTEXT as authoritative for npinumber and base address/phone.
    - You MAY refine phone, gender, specialization, and skills if you find better data.
    - npinumber MUST be the 10-digit NPI for this provider.
    - You may enrich specialization with more detailed specialties.
 
-6) QUALITY:
+7) QUALITY:
    - Set completeness_score to your estimate of how complete the overall profile is (0 to 1).
    - Set confidence_score to your overall confidence in the extracted data (0 to 1).
 
-7) OUTPUT:
+8) OUTPUT:
    - RETURN ONLY VALID JSON. NO markdown code fences. NO comments. NO extra keys.
    - All top-level keys must exist (you can use [] for empty lists).
+9) CLINICAL PREFERENCES:
+   - preferences.clinicalpreferences MUST be a comma-separated string of clinical capabilities.
+   - If you are unsure, leave it empty.
+10) DIGITAL PASSPORT:
+   - Each object represents ONE hospital affiliation.
+   - digital_passport.available_locations MUST be a comma-separated string of locations.
+   - If you are unsure, leave the list empty.
 """
 
     data: Dict[str, Any] = {}
@@ -597,15 +795,40 @@ IMPORTANT NORMALIZATION RULES:
             **(info or {}),
         }
 
+        prefs = data.get("preferences") or {}
+        cp = _normalize_clinical_preferences(prefs.get("clinicalpreferences") or data.get("clinicalpreferences"))
+        if cp:
+            prefs["clinicalpreferences"] = cp
+        data["preferences"] = prefs
+
+        dp_raw = data.get("digital_passport") or data.get("DigitalPassport") or {}
+        if not dp_raw:
+            dp_raw = {k: data.get(k) for k in (
+                "hospital_affiliation",
+                "licence_number",
+                "consultation_hours",
+                "available_locations",
+                "state",
+                "zipcode",
+                "address",
+                "address2",
+                "city",
+            ) if data.get(k)}
+        dp = _normalize_digital_passport(dp_raw)
+        if dp:
+            data["digital_passport"] = dp
+
         # ── Normalizo seksionet me helper-in e ri (_normalize_section_rows) ──
         for section in (
             "education", "medical_education", "graduate_school", "internship",
             "residency", "fellowship", "board_certifications", "medical_licences",
             "dea_registration", "other_exams", "professional_reference",
         ):
+            min_fields = 1 if section == "internship" else 2
             data[section] = _normalize_section_rows(
                 data.get(section),
                 date_keys=("issue_date", "expiry_date", "start", "end", "date", "graduated"),
+                min_fields=min_fields,
             )
 
         # Siguro që 'quality' ekziston dhe është në [0,1]

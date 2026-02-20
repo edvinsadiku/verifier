@@ -1,0 +1,78 @@
+# ───── Python ─────
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenv
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ───── Django ─────
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+db.sqlite3
+db.sqlite3-journal
+
+# Media & static të gjeneruara
+media/
+staticfiles/
+static_root/
+static_cdn/
+
+# Migrations të auto-gjeneruara (opsionale, hiqi këto nëse do ti mbash në git)
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# ───── IDE / Editor ─────
+# VSCode
+.vscode/
+
+# PyCharm / JetBrains
+.idea/
+
+# Code Runner / të tjerë
+*.code-workspace
+
+# ───── Sistemi i operimit ─────
+.DS_Store
+Thumbs.db
+
+# ───── Environment / sekrete ─────
+.env
+*.env
+.env.*
+.envrc
+
+# ───── Coverage & test ─────
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# ───── Build / dist ─────
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# ───── MyPy / ruff / linters ─────
+.mypy_cache/
+.dmypy.json
+.dmypy/
+.pyre/
+.pytype/
+.ruff_cache/

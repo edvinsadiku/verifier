@@ -11,16 +11,26 @@ class InformationsSer(serializers.Serializer):
     city = serializers.CharField(required=False, allow_blank=True)
     stateprovince = serializers.CharField(required=False, allow_blank=True)
     zipcode = serializers.CharField(required=False, allow_blank=True)
+    mailaddress = serializers.CharField(required=False, allow_blank=True)
+    mailaddress2 = serializers.CharField(required=False, allow_blank=True)
+    mailcity = serializers.CharField(required=False, allow_blank=True)
+    mailingstateprovince = serializers.CharField(required=False, allow_blank=True)
+    mailingzipcode = serializers.CharField(required=False, allow_blank=True)
     specialization = serializers.CharField(required=False, allow_blank=True)
     skills = serializers.CharField(required=False, allow_blank=True)
     total_experience_years = serializers.CharField(required=False, allow_blank=True)
+    role = serializers.CharField(required=False, allow_blank=True)
+    gender = serializers.CharField(required=False, allow_blank=True)
     _meta = serializers.DictField(required=False)
 
 class RowEdu(serializers.Serializer):
     institution = serializers.CharField(required=False, allow_blank=True)
     degree = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+    address2 = serializers.CharField(required=False, allow_blank=True)
     city = serializers.CharField(required=False, allow_blank=True)
     state = serializers.CharField(required=False, allow_blank=True)
+    zipcode = serializers.CharField(required=False, allow_blank=True)
     country = serializers.CharField(required=False, allow_blank=True)
     start = serializers.CharField(required=False, allow_blank=True)
     end = serializers.CharField(required=False, allow_blank=True)
@@ -30,8 +40,11 @@ class RowEdu(serializers.Serializer):
 class RowTraining(serializers.Serializer):
     institution = serializers.CharField(required=False, allow_blank=True)
     specialty = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+    address2 = serializers.CharField(required=False, allow_blank=True)
     city = serializers.CharField(required=False, allow_blank=True)
     state = serializers.CharField(required=False, allow_blank=True)
+    zipcode = serializers.CharField(required=False, allow_blank=True)
     country = serializers.CharField(required=False, allow_blank=True)
     start = serializers.CharField(required=False, allow_blank=True)
     end = serializers.CharField(required=False, allow_blank=True)
@@ -74,6 +87,22 @@ class RowRef(serializers.Serializer):
     relationship = serializers.CharField(required=False, allow_blank=True)
     _meta = serializers.DictField(required=False)
 
+class PreferencesSer(serializers.Serializer):
+    clinicalpreferences = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
+class DigitalPassportSer(serializers.Serializer):
+    hospital_affiliation = serializers.CharField(required=False, allow_blank=True)
+    licence_number = serializers.CharField(required=False, allow_blank=True)
+    consultation_hours = serializers.CharField(required=False, allow_blank=True)
+    available_locations = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    zipcode = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+    address2 = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    _meta = serializers.DictField(required=False)
+
 class ResumePayloadSer(serializers.Serializer):
     informations = InformationsSer(required=False)
     education = RowEdu(many=True, required=False)
@@ -87,4 +116,6 @@ class ResumePayloadSer(serializers.Serializer):
     dea_registration = RowDEA(many=True, required=False)
     other_exams = serializers.ListField(child=serializers.DictField(), required=False)
     professional_reference = RowRef(many=True, required=False)
+    preferences = PreferencesSer(required=False)
+    digital_passport = DigitalPassportSer(many=True, required=False)
     quality = serializers.DictField(required=False)
