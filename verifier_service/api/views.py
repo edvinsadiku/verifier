@@ -4,6 +4,7 @@ import re
 import json
 import hashlib
 import requests
+from datetime import date
 from typing import Any, Dict, List, Tuple, Optional
 
 from django.conf import settings
@@ -95,6 +96,186 @@ def _normalize_section_rows(rows: Any, date_keys: Tuple[str, ...], min_fields: i
 
         cleaned.append(row)
     return cleaned
+
+
+def _year_from_value(value: Any) -> Optional[int]:
+    if value in (None, "", [], {}):
+        return None
+
+    current_year = date.today().year
+    if isinstance(value, int):
+        year = value
+    else:
+        match = re.search(r"\b(19\d{2}|20\d{2})\b", str(value))
+        if not match:
+            return None
+        year = int(match.group(1))
+
+    if 1950 <= year <= current_year:
+        return year
+    return None
+
+
+def _coerce_experience_years(value: Any) -> Optional[int]:
+    try:
+        years = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+    if 0 <= years <= 60:
+        return years
+    return None
+
+
+def _add_experience_candidate(candidates: List[Dict[str, Any]], year: Optional[int], source: str):
+    if year is None:
+        return
+    candidates.append({"year": year, "source": source})
+
+
+def _clean_public_email(value: Any) -> str:
+    email = str(value or "").strip().lower()
+    if not email:
+        return ""
+    match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", email, re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(0)[:254]
+
+
+def _normalize_contact_email(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    info = payload.get("informations")
+    if not isinstance(info, dict):
+        info = {}
+        payload["informations"] = info
+    email = _clean_public_email(info.get("emergencycontactemail") or info.get("email"))
+    info.pop("email", None)
+    if email:
+        info["emergencycontactemail"] = email
+    return payload
+
+
+def _find_public_contact_email(
+    *,
+    client,
+    model_name: str,
+    npi: str,
+    name_hint: str,
+    npi_seed: Dict[str, Any],
+) -> str:
+    try:
+        tools = [types.Tool(google_search=types.GoogleSearch())]
+        cfg = types.GenerateContentConfig(
+            tools=tools,
+            temperature=0.1,
+        )
+        prompt = f"""
+Find one public professional/provider/practice email for this medical provider.
+
+- NPI: {npi}
+- Name hint: "{name_hint or "unknown"}"
+- Official NPI registry context: {json.dumps(npi_seed or {}, ensure_ascii=False)}
+
+Rules:
+- Return ONLY strict JSON.
+- Output format: {{"email":"...","source_hint":"..."}}
+- Use only a public professional/provider/practice email from hospital, clinic, practice, faculty, or official professional profile pages.
+- Do NOT guess an email.
+- Do NOT return placeholder emails, personal emails, or unrelated directory emails.
+- If no reliable public email is found, return {{"email":"","source_hint":""}}.
+"""
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+            config=cfg,
+        )
+        raw = _strip_md_fences(_resp_to_text(resp))
+        if not raw:
+            return ""
+        data = _json_relaxed(raw)
+        if not isinstance(data, dict):
+            return ""
+        return _clean_public_email(data.get("email"))
+    except Exception:
+        return ""
+
+
+def _normalize_experience_years(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deterministic fallback for total_experience_years.
+    Gemini can omit this field even when it returns dated licences/training rows,
+    so compute it from the earliest reliable clinical/professional year.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    info = payload.get("informations")
+    if not isinstance(info, dict):
+        info = {}
+        payload["informations"] = info
+
+    existing_years = _coerce_experience_years(info.get("total_experience_years"))
+    if existing_years:
+        info["total_experience_years"] = existing_years
+        meta = info.get("_meta") if isinstance(info.get("_meta"), dict) else {}
+        meta.setdefault("experience_source", "model provided total_experience_years")
+        meta.setdefault("experience_confidence", "medium")
+        info["_meta"] = meta
+        return payload
+
+    candidates: List[Dict[str, Any]] = []
+
+    for row in payload.get("medical_licences") or []:
+        if not isinstance(row, dict):
+            continue
+        _add_experience_candidate(
+            candidates,
+            _year_from_value(row.get("issue_date")),
+            "medical_licences.issue_date",
+        )
+
+    for section in ("internship", "residency", "fellowship"):
+        for row in payload.get(section) or []:
+            if not isinstance(row, dict):
+                continue
+            _add_experience_candidate(
+                candidates,
+                _year_from_value(row.get("start") or row.get("end")),
+                f"{section}.start_or_end",
+            )
+
+    for section in ("medical_education", "graduate_school", "education"):
+        for row in payload.get(section) or []:
+            if not isinstance(row, dict):
+                continue
+            _add_experience_candidate(
+                candidates,
+                _year_from_value(row.get("graduated") or row.get("end")),
+                f"{section}.graduated_or_end",
+            )
+
+    if not candidates:
+        info.pop("total_experience_years", None)
+        return payload
+
+    earliest = min(candidates, key=lambda item: item["year"])
+    years = max(0, date.today().year - earliest["year"])
+    if years > 60:
+        return payload
+
+    info["total_experience_years"] = years
+    meta = info.get("_meta") if isinstance(info.get("_meta"), dict) else {}
+    meta.update(
+        {
+            "experience_basis_year": earliest["year"],
+            "experience_source": earliest["source"],
+            "experience_confidence": "medium",
+            "experience_method": "deterministic_fallback",
+        }
+    )
+    info["_meta"] = meta
+    return payload
 
 
 def _merge_rows_by_key(base_rows: Any, patch_rows: Any, key_fields: List[str]) -> List[Dict[str, Any]]:
@@ -430,6 +611,7 @@ def parse_resume(request):
             }],
             "quality": {"completeness_score": 0.78, "confidence_score": 0.8}
         }
+        payload = _normalize_experience_years(payload)
         ser = ResumePayloadSer(data=payload)
         ser.is_valid(raise_exception=True)
         return Response({"detail": "ok", "parsed": ser.data, "quality": payload.get("quality")})
@@ -449,7 +631,7 @@ You are an information extraction engine. Extract ONLY the requested fields stri
 Return VALID JSON only. Omit fields you are not confident about.
 Normalize phones to +1XXXXXXXXXX and dates to YYYY-MM-DD when possible (else MM/YYYY).
 Allowed sections and fields (use only these exact keys):
-- informations: legalfirstname, legallastname, legalmiddlename, npinumber, phone, address, address2, city, stateprovince, zipcode, specialization, skills, total_experience_years
+- informations: legalfirstname, legallastname, legalmiddlename, npinumber, phone, emergencycontactemail, address, address2, city, stateprovince, zipcode, specialization, skills, total_experience_years
 - preferences: clinicalpreferences
 - digital_passport: LIST of objects with fields hospital_affiliation, licence_number, consultation_hours, available_locations, state, zipcode, address, address2, city
 - education/medical_education/graduate_school: institution, degree, address, address2, city, state, zipcode, country, start, end, graduated
@@ -462,6 +644,7 @@ Allowed sections and fields (use only these exact keys):
 For preferences.clinicalpreferences, return a comma-separated string of clinical capabilities.
 For digital_passport.available_locations, return a comma-separated list of locations.
 If an entry has an institution, try to provide its full address (address, city, state, zipcode, country, and address2 if available).
+For informations.emergencycontactemail, use only a public professional/provider/practice contact email found in the source text. Do not invent; omit if not present.
 If unsure, omit.
 """.strip() + "\n\n" + text[:15000]
 
@@ -481,6 +664,10 @@ If unsure, omit.
         info = (data.get("informations") or {})
         if "phone" in info:
             info["phone"] = clean_phone_number(info["phone"])
+        info["emergencycontactemail"] = _clean_public_email(
+            info.get("emergencycontactemail") or info.get("email")
+        )
+        info.pop("email", None)
         if "npinumber" in info:
             info["npinumber"] = re.sub(r"\D", "", str(info["npinumber"]))[:10]
 
@@ -501,6 +688,7 @@ If unsure, omit.
             **(info or {}),
             **{k: v for k, v in (base_info or {}).items() if v}
         }
+        data = _normalize_contact_email(data)
 
         prefs = data.get("preferences") or {}
         cp = _normalize_clinical_preferences(prefs.get("clinicalpreferences") or data.get("clinicalpreferences"))
@@ -525,6 +713,7 @@ If unsure, omit.
         if dp:
             data["digital_passport"] = dp
 
+        data = _normalize_experience_years(data)
         ser = ResumePayloadSer(data=data)
         ser.is_valid(raise_exception=True)
         quality = data.get("quality") or {"completeness_score": 0.8, "confidence_score": 0.75}
@@ -657,7 +846,7 @@ TOP-LEVEL KEYS (all lowercase):
     legalfirstname, legallastname, legalmiddlename,
     npinumber, phone, address, address2, city, stateprovince, zipcode,
     mailaddress, mailaddress2, mailcity, mailingstateprovince, mailingzipcode,
-    role, gender, specialization, skills, total_experience_years
+    role, gender, specialization, skills, total_experience_years, emergencycontactemail
 
 - "preferences": SINGLE OBJECT with fields:
     clinicalpreferences
@@ -702,6 +891,12 @@ IMPORTANT NORMALIZATION RULES:
 1) PHONE:
    - Normalize phones to the E.164-like format "+1XXXXXXXXXX" when possible.
    - If you cannot normalize, leave phone empty.
+
+1b) EMAIL:
+   - informations.emergencycontactemail must be a public professional/provider/practice contact email.
+   - Search provider profile, practice, hospital affiliation, and public professional pages.
+   - Do NOT return guessed emails, private emails, or unrelated directory emails.
+   - If no reliable public email is found, leave emergencycontactemail empty or omit it.
 
 2) DATES:
    - Normalize dates to "YYYY-MM-DD" when exact, or "YYYY-MM" / "YYYY" if only partial.
@@ -752,17 +947,30 @@ IMPORTANT NORMALIZATION RULES:
    - npinumber MUST be the 10-digit NPI for this provider.
    - You may enrich specialization with more detailed specialties.
 
-7) QUALITY:
+7) EXPERIENCE YEARS:
+   - informations.total_experience_years must be an integer number of years, not text.
+   - Only set it when there is public evidence for a reliable start year.
+   - Reliable start-year evidence includes: first medical license issue year, first attending/clinical role,
+     first hospital affiliation, residency/fellowship start year, or medical school graduation year if that is
+     the only available professional start evidence.
+   - Calculate it as current calendar year minus the earliest reliable clinical/professional year.
+   - Do NOT infer experience from age, seniority words, biography tone, or NPI creation date alone.
+   - If the evidence is weak or ambiguous, omit total_experience_years or leave it empty.
+   - Put the evidence explanation in informations._meta using:
+       experience_basis_year, experience_source, experience_confidence
+     where experience_confidence is "high", "medium", or "low".
+
+8) QUALITY:
    - Set completeness_score to your estimate of how complete the overall profile is (0 to 1).
    - Set confidence_score to your overall confidence in the extracted data (0 to 1).
 
-8) OUTPUT:
+9) OUTPUT:
    - RETURN ONLY VALID JSON. NO markdown code fences. NO comments. NO extra keys.
    - All top-level keys must exist (you can use [] for empty lists).
-9) CLINICAL PREFERENCES:
+10) CLINICAL PREFERENCES:
    - preferences.clinicalpreferences MUST be a comma-separated string of clinical capabilities.
    - If you are unsure, leave it empty.
-10) DIGITAL PASSPORT:
+11) DIGITAL PASSPORT:
    - Each object represents ONE hospital affiliation.
    - digital_passport.available_locations MUST be a comma-separated string of locations.
    - If you are unsure, leave the list empty.
@@ -786,6 +994,10 @@ IMPORTANT NORMALIZATION RULES:
         info = (data.get("informations") or {}) if isinstance(data, dict) else {}
         if "phone" in info:
             info["phone"] = clean_phone_number(info["phone"])
+        info["emergencycontactemail"] = _clean_public_email(
+            info.get("emergencycontactemail") or info.get("email")
+        )
+        info.pop("email", None)
         # siguro npinumber 10-shifror
         info["npinumber"] = re.sub(r"\D", "", str(info.get("npinumber") or npi))[:10]
 
@@ -794,6 +1006,19 @@ IMPORTANT NORMALIZATION RULES:
             **{k: v for k, v in (npi_seed or {}).items() if v},
             **(info or {}),
         }
+        data = _normalize_contact_email(data)
+        info = (data.get("informations") or {}) if isinstance(data, dict) else {}
+        if isinstance(info, dict) and not _clean_public_email(info.get("emergencycontactemail")):
+            fallback_email = _find_public_contact_email(
+                client=client,
+                model_name=model_name,
+                npi=npi,
+                name_hint=name_hint,
+                npi_seed=npi_seed,
+            )
+            if fallback_email:
+                info["emergencycontactemail"] = fallback_email
+                data["informations"] = info
 
         prefs = data.get("preferences") or {}
         cp = _normalize_clinical_preferences(prefs.get("clinicalpreferences") or data.get("clinicalpreferences"))
@@ -830,6 +1055,8 @@ IMPORTANT NORMALIZATION RULES:
                 date_keys=("issue_date", "expiry_date", "start", "end", "date", "graduated"),
                 min_fields=min_fields,
             )
+
+        data = _normalize_experience_years(data)
 
         # Siguro që 'quality' ekziston dhe është në [0,1]
         quality = data.get("quality") or {"completeness_score": 0.7, "confidence_score": 0.9}

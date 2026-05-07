@@ -6,6 +6,7 @@ class InformationsSer(serializers.Serializer):
     legalmiddlename = serializers.CharField(required=False, allow_blank=True)
     npinumber = serializers.CharField(required=False, allow_blank=True)
     phone = serializers.CharField(required=False, allow_blank=True)
+    emergencycontactemail = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
     address2 = serializers.CharField(required=False, allow_blank=True)
     city = serializers.CharField(required=False, allow_blank=True)
